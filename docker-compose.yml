@@ -11,6 +11,8 @@ services:
       - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
     ports:
       - "19092:19092"
+    volumes:
+      - ./data/redpanda:/var/lib/redpanda/data
     networks:
       - guardian-network
     healthcheck:
@@ -18,10 +20,26 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    volumes:
-      - ./data/redpanda:/var/lib/redpanda/data
 
-  # 2. The Columnar Database
+  # 2. Redpanda Console (Optional UI for the broker)
+  console:
+    image: docker.redpanda.com/redpandadata/console:v2.3.1
+    container_name: redpanda-console
+    entrypoint: /bin/sh
+    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["redpanda:9092"]
+    ports:
+      - "8080:8080"
+    networks:
+      - guardian-network
+    depends_on:
+      - redpanda
+
+  # 3. The Columnar Database
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     container_name: clickhouse-guardian
@@ -34,15 +52,31 @@ services:
       nofile:
         soft: 262144
         hard: 262144
+    volumes:
+      - ./data/clickhouse:/var/lib/clickhouse
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql 
     networks:
       - guardian-network
-    volumes:
-      # Keeps your data safe if the container crashes
-      - ./data/clickhouse:/var/lib/clickhouse 
-      # 🚀 AUTOMATION: Runs your SQL script automatically on first boot
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
-  # 3. Python Microservice: The Producer
+  # 4. Observability Dashboard
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana-guardian
+    environment:
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount the provisioning config
+      - ./grafana/provisioning/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml
+      # Mount the actual dashboard JSON files
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - guardian-network
+    depends_on:
+      - clickhouse
+
+  # 5. Microservice: Producer
   producer:
     build: .
     container_name: python-producer
@@ -50,7 +84,6 @@ services:
     env_file:
       - .env
     environment:
-      # Use internal Docker networking to talk to Redpanda
       - REDPANDA_BROKERS=redpanda:9092
     networks:
       - guardian-network
@@ -58,7 +91,7 @@ services:
       redpanda:
         condition: service_healthy
 
-  # 4. Python Microservice: The Consumer
+  # 6. Microservice: Consumer
   consumer:
     build: .
     container_name: python-consumer
@@ -67,7 +100,6 @@ services:
       - .env
     environment:
       - REDPANDA_BROKERS=redpanda:9092
-      # Override localhost to talk to the ClickHouse container directly
       - CLICKHOUSE_HOST=clickhouse
     networks:
       - guardian-network
@@ -77,7 +109,7 @@ services:
       clickhouse:
         condition: service_started
 
-  # 5. Python Microservice: The Drift Monitor
+  # 7. Microservice: Drift Monitor
   drift-monitor:
     build: .
     container_name: python-drift-monitor
@@ -86,25 +118,14 @@ services:
       - .env
     environment:
       - REDPANDA_BROKERS=redpanda:9092
+      - CLICKHOUSE_HOST=clickhouse
     networks:
       - guardian-network
     depends_on:
       redpanda:
         condition: service_healthy
-
-  # 6. The Observability Dashboard
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana-guardian
-    environment:
-      # Automatically install the official ClickHouse plugin on boot
-      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
-    ports:
-      - "3000:3000"
-    networks:
-      - guardian-network
-    depends_on:
-      - clickhouse
+      clickhouse:
+        condition: service_started
 
 networks:
   guardian-network:
