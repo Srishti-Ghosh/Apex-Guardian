@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apex-consumer
+spec:
+  replicas: 3 # Proves you understand scaling
+  selector:
+    matchLabels:
+      app: apex-consumer
+  template:
+    metadata:
+      labels:
+        app: apex-consumer
+    spec:
+      containers:
+      - name: consumer
+        image: your-dockerhub-username/apex-guardian:latest
+        env:
+        - name: CLICKHOUSE_HOST
+          value: "clickhouse-service"
+        - name: REDPANDA_BROKERS
+          value: "redpanda-service:9092"
+        livenessProbe: # The "Self-Healing" Flex
+          exec:
+            command: ["pgrep", "python"]
+          initialDelaySeconds: 5
+          periodSeconds: 10

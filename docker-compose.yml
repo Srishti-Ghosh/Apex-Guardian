@@ -1,0 +1,111 @@
+services:
+  # 1. The Message Broker
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.2.1
+    container_name: redpanda-guardian
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "19092:19092"
+    networks:
+      - guardian-network
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./data/redpanda:/var/lib/redpanda/data
+
+  # 2. The Columnar Database
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: clickhouse-guardian
+    environment:
+      - CLICKHOUSE_PASSWORD=apex_admin
+    ports:
+      - "8123:8123" 
+      - "9000:9000" 
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - guardian-network
+    volumes:
+      # Keeps your data safe if the container crashes
+      - ./data/clickhouse:/var/lib/clickhouse 
+      # 🚀 AUTOMATION: Runs your SQL script automatically on first boot
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  # 3. Python Microservice: The Producer
+  producer:
+    build: .
+    container_name: python-producer
+    command: python producer.py
+    env_file:
+      - .env
+    environment:
+      # Use internal Docker networking to talk to Redpanda
+      - REDPANDA_BROKERS=redpanda:9092
+    networks:
+      - guardian-network
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  # 4. Python Microservice: The Consumer
+  consumer:
+    build: .
+    container_name: python-consumer
+    command: python consumer.py
+    env_file:
+      - .env
+    environment:
+      - REDPANDA_BROKERS=redpanda:9092
+      # Override localhost to talk to the ClickHouse container directly
+      - CLICKHOUSE_HOST=clickhouse
+    networks:
+      - guardian-network
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      clickhouse:
+        condition: service_started
+
+  # 5. Python Microservice: The Drift Monitor
+  drift-monitor:
+    build: .
+    container_name: python-drift-monitor
+    command: python drift_monitor.py
+    env_file:
+      - .env
+    environment:
+      - REDPANDA_BROKERS=redpanda:9092
+    networks:
+      - guardian-network
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  # 6. The Observability Dashboard
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana-guardian
+    environment:
+      # Automatically install the official ClickHouse plugin on boot
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
+    ports:
+      - "3000:3000"
+    networks:
+      - guardian-network
+    depends_on:
+      - clickhouse
+
+networks:
+  guardian-network:
+    driver: bridge

@@ -1,0 +1,12 @@
+# Environments
+.env
+.venv/
+env/
+__pycache__/
+
+# Data Volumes
+data/
+*.log
+
+# Mac System Files
+.DS_Store

@@ -1,0 +1,6 @@
+faststream[kafka]
+alpaca-py
+python-dotenv
+clickhouse-connect
+scipy
+numpy

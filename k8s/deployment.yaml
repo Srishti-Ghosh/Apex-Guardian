@@ -1,0 +1,45 @@
+# 🛡️ Apex-Guardian Kubernetes Architecture
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apex-consumer-deployment
+  labels:
+    app: apex-consumer
+spec:
+  replicas: 3 # Proves scalability
+  selector:
+    matchLabels:
+      app: apex-consumer
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: apex-consumer
+    spec:
+      containers:
+      - name: consumer
+        image: apex-guardian/consumer:v1
+        envFrom:
+        - secretRef:
+            name: alpaca-api-secrets
+        env:
+        - name: CLICKHOUSE_HOST
+          value: "clickhouse-service.database.svc.cluster.local"
+        - name: REDPANDA_BROKERS
+          value: "redpanda-0.redpanda.streaming.svc.cluster.local:9092"
+        livenessProbe: # Proves Self-Healing
+          exec:
+            command: ["pgrep", "python"]
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "250m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
